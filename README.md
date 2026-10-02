@@ -43,8 +43,8 @@ docs/                          Screenshots
 
 I wanted the pipelines to run without a key or password stored anywhere, so every connection uses an identity and a role assignment in the Bicep:
 
-- Data Factory writes to the lake as its system-assigned managed identity. It has Storage Blob Data Contributor on the storage account and nothing wider.
-- The same identity has Key Vault Secrets User on the vault. Nothing uses it yet, because nflverse is public. It's there for a source that needs a password.
+- Data Factory writes to the lake as its system-assigned managed identity. It has Storage Blob Data Contributor on the storage account.
+- The same identity has Key Vault Secrets User on the vault. Nothing uses it yet because nflverse is public, but it's there for a source that needs a password.
 - My Fabric user has Storage Blob Data Reader, which is what the shortcut reads with.
 - The DevOps pipeline signs in with workload identity federation, so DevOps holds no client secret.
 
