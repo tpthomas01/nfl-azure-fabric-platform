@@ -1,4 +1,4 @@
--- NFL Azure Lab - queries for the lakehouse SQL analytics endpoint (T-SQL, read-only)
+-- Queries for the lakehouse SQL analytics endpoint (T-SQL, read-only)
 -- Same Delta tables the notebook wrote, now queried with plain SQL. No copy, no load step.
 
 -- 1. Most efficient QBs of 2024 (EPA per dropback)

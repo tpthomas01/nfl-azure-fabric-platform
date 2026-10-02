@@ -1,4 +1,4 @@
-// NFL Azure Lab - infrastructure as code
+// Infrastructure for the NFL data platform
 // Deploys: ADLS Gen2 storage (bronze + config containers), Key Vault, Data Factory,
 // and the RBAC role assignments that let ADF write to the lake and Fabric read it.
 
@@ -116,7 +116,7 @@ resource adfKeyVaultAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
-// Your Fabric user can read the lake (for the OneLake shortcut)
+// The Fabric user can read the lake (for the OneLake shortcut)
 resource fabricLakeRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(fabricUserObjectId)) {
   name: guid(storage.id, fabricUserObjectId, storageBlobDataReader)
   scope: storage

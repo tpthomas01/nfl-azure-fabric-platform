@@ -1,10 +1,10 @@
-# NFL Data Platform on Azure and Microsoft Fabric
+# NFL data platform on Azure and Microsoft Fabric
 
-An end-to-end data platform built on Azure, from infrastructure to dashboard, using public NFL data as the source. Everything is provisioned as code, deployed through a CI/CD pipeline with an approval gate, and secured without a single stored key or password.
+A small data platform I built end to end on Azure. The infrastructure is written in Bicep and deployed through Azure DevOps. Data Factory pulls public NFL data into a data lake, and a Fabric lakehouse turns it into Delta tables and a Power BI report.
 
-I built this as a personal project to work hands-on with the Azure-native stack. My professional data engineering work has been on Databricks, Spark, and Snowflake; this project applies the same patterns (medallion layers, idempotent loads, parameterized pipelines) with Bicep, Azure DevOps, Data Factory, and Fabric.
+My paid data engineering work has been on Databricks, Spark, and Snowflake. I hadn't used Data Factory, Fabric, or Bicep on a client, so I built this to learn them properly. I picked NFL data because it's more fun to check than a sample sales database: I know what the right answer looks like.
 
-## Architecture
+## How it fits together
 
 ```mermaid
 flowchart TD
@@ -19,117 +19,111 @@ flowchart TD
     ADO["Azure DevOps pipeline<br/>what-if, approval, deploy"] -.->|"deploys"| BICEP
 ```
 
-| Layer | Tool | What it does |
-|---|---|---|
-| Infrastructure | Bicep | Defines the data lake, Key Vault, Data Factory, and every permission |
-| CI/CD | Azure DevOps Pipelines | Validates the Bicep, previews changes with what-if, waits for approval, deploys |
-| Ingestion | Azure Data Factory | One parameterized pipeline loads every source listed in a control table |
-| Storage | ADLS Gen2 | Raw files land in bronze, in a dated folder per run |
-| Transformation | Fabric lakehouse, Spark | Builds silver and gold Delta tables |
-| Serving | SQL analytics endpoint, Power BI | Query and report on the same Delta tables, with no extra copy |
+Data Factory copies CSV files from nflverse into the `bronze` container of an ADLS Gen2 account, in a dated folder for each run. The Fabric lakehouse reads that folder through a OneLake shortcut, so the files aren't copied a second time. A Spark notebook builds three silver and three gold Delta tables. The SQL analytics endpoint and a Direct Lake Power BI model both read those tables directly.
 
-## What's in this repo
+The storage account, Key Vault, Data Factory, and the role assignments between them all come from one Bicep template, which an Azure DevOps pipeline deploys.
+
+## What's in the repo
 
 ```
 infra/
-  main.bicep                   Storage, Key Vault, Data Factory, and RBAC role assignments
+  main.bicep                   Storage, Key Vault, Data Factory, and the role assignments
   main.dev.bicepparam          Parameters for the dev environment
-azure-pipelines.yml            CI/CD pipeline (Microsoft-hosted agent)
-azure-pipelines.windows.yml    The same pipeline for a self-hosted Windows agent
+azure-pipelines.yml            Validate and deploy pipeline for the Bicep
 adf/
-  control.csv                  Control table: one row per source file to ingest
-  pipeline/ dataset/ linkedService/   Data Factory definitions, exported from the factory
+  control.csv                  One row per source file to ingest
+  pipeline/ dataset/ linkedService/   Data Factory definitions, copied out of the factory
 fabric/
   nb_nfl_bronze_to_gold.py     Spark notebook: bronze to silver to gold
   sql_endpoint_queries.sql     T-SQL queries against the SQL analytics endpoint
 docs/                          Screenshots
 ```
 
-## Design decisions
+## Infrastructure and access
 
-### No keys, no passwords
+I wanted the pipelines to run without a key or password stored anywhere, so every connection uses an identity and a role assignment in the Bicep:
 
-There is no stored secret anywhere in this build.
+- Data Factory writes to the lake as its system-assigned managed identity. It has Storage Blob Data Contributor on the storage account and nothing wider.
+- The same identity has Key Vault Secrets User on the vault. Nothing uses it yet, because nflverse is public. It's there for a source that needs a password.
+- My Fabric user has Storage Blob Data Reader, which is what the shortcut reads with.
+- The DevOps pipeline signs in with workload identity federation, so DevOps holds no client secret.
 
-- Data Factory writes to the lake with its **system-assigned managed identity**.
-- Fabric reads the lake with an **Entra user identity**.
-- The DevOps pipeline signs in to Azure with **workload identity federation**, so there is no client secret to expire or leak.
-- Every permission is an **RBAC role assignment written in Bicep**, so access changes are reviewed like any other code change.
+One caveat: shared key access is still switched on for the storage account, and I used it to upload the control file from the portal. Turning it off is on the list at the bottom.
 
-### A pipeline identity that can only do what the template needs
+The pipeline's own permissions took the most thought. Its service connection gets Contributor on the resource group, and Contributor can't create role assignments, which this template does three times. Making it Owner would work, but then it could grant any role to anyone. I gave it Role Based Access Control Administrator with a condition that limits it to assigning the three roles above.
 
-The default Contributor role can create resources but cannot create role assignments, and this template contains three. The common fix is to make the pipeline an Owner, which would let it grant any role to anyone. Instead, the pipeline identity has a **constrained Role Based Access Control Administrator** role that can assign only the three roles the template uses: Storage Blob Data Contributor, Storage Blob Data Reader, and Key Vault Secrets User.
+## Deployment pipeline
 
-### Preview before every deployment
+`azure-pipelines.yml` has two stages. Validate builds the Bicep and runs `what-if`. Deploy runs only on `main` and waits for an approval on the `nfl-dev` environment. The pipeline triggers only when something under `infra/` changes.
 
-The pipeline has two stages:
+Two things I learned from running it:
 
-1. **Validate** compiles the Bicep and runs `what-if`, which shows exactly what would be created, changed, or deleted.
-2. **Deploy** runs only from `main`, and only after a person approves it on the `nfl-dev` environment.
-
-Running the deployment a second time reports no changes, which confirms the template is idempotent.
+- The first run validated and then skipped the deploy. My first push had created a `master` branch, and the deploy condition only allows `main`. The condition was right, so I renamed the branch.
+- After a clean deploy, `what-if` still lists six resources as "modify". None of those are real changes. They're defaults Azure fills in that the template doesn't declare, plus a managed identity ID that `what-if` can't resolve ahead of time. Redeploying changes nothing.
 
 ![Azure DevOps pipeline run](docs/pipeline-run.png)
 
-### One ingestion pipeline for every source
+## Ingestion
 
-The Data Factory pipeline `pl_ingest_nfl` is metadata-driven:
+`pl_ingest_nfl` is one pipeline for every source. A Lookup reads `control.csv`, a ForEach loops over its rows four at a time, and a Copy activity lands each file in `bronze/nfl/<table>/ingest_date=YYYY-MM-DD/`. Adding a source means adding a row to the control file. A `season` parameter fills the `{season}` placeholder in each path, which is how I loaded 2023 after 2024 without changing the pipeline.
 
-`Lookup (control.csv)` → `ForEach row (in parallel)` → `Copy file to bronze`
+Files are copied as binary, with no parsing, and each run gets its own dated folder. That means I can rebuild silver and gold from bronze without going back to the source.
 
-- **Adding a source means adding a row** to the control file, not building another pipeline.
-- A `season` parameter fills a placeholder in each source path, so the same pipeline loads or backfills any season.
-- The source and sink datasets are parameterized, so one pair of datasets serves every table.
-- Copies retry twice before failing.
+What went wrong while I built it:
+
+- The ForEach failed with "the function 'length' expects an array". I had pointed it at the Lookup's whole output instead of `output.value`. The activity's output JSON made that obvious.
+- An expression pasted with a space in front of the `@` is saved as plain text, so the bronze folder would have been named after the expression itself.
+- The file name comes from `split(item().relative_url, '/')[1]`. That only works because every path in the control file is exactly one folder deep.
 
 ![Data Factory pipeline](docs/adf-pipeline.png)
 
-### Bronze is raw and never overwritten
+## Lakehouse
 
-Files are copied byte for byte, with no parsing, into `bronze/nfl/<table>/ingest_date=YYYY-MM-DD/`. Every run lands in its own dated folder, so earlier loads are kept and silver and gold can always be rebuilt from bronze without going back to the source.
-
-### Fabric reads the lake in place
-
-The Fabric lakehouse uses a **OneLake shortcut** to the bronze container instead of copying the data. There is one copy of the data and no sync job to maintain.
-
-### Loads that are safe to rerun
-
-The Spark notebook picks its load strategy by table:
-
-- **Player stats (the large table):** a Delta `MERGE` keyed on player, season, and week. Rerunning the load creates no duplicates, and loading another season adds rows without touching the existing ones.
-- **Small reference tables (teams, games):** a full overwrite, because a merge is unnecessary for a few dozen rows.
-- **Incremental by default:** the notebook processes only the newest `ingest_date` folder.
-
-### One copy of the data, three ways to read it
-
-Spark writes the Delta tables once. The SQL analytics endpoint and a Power BI Direct Lake model read those same files, with no import and no scheduled refresh.
-
-## Data model
+`fabric/nb_nfl_bronze_to_gold.py` reads the newest `ingest_date` folder for each table and builds these:
 
 | Table | Layer | Contents |
 |---|---|---|
 | `silver_player_week` | Silver | One row per player per week, typed and deduplicated |
 | `silver_teams` | Silver | Team reference data |
-| `silver_games` | Silver | One row per game |
+| `silver_games` | Silver | One row per game played |
 | `gold_qb_season` | Gold | Quarterback season totals with EPA per dropback, joined to teams |
-| `gold_fantasy_leaders` | Gold | Fantasy points with a rank within each position (WR1, RB12, and so on) |
-| `gold_team_records` | Gold | Standings, built by unpivoting home and away games to one row per team per game |
+| `gold_fantasy_leaders` | Gold | PPR points with a rank within each position (WR1, RB12, and so on) |
+| `gold_team_records` | Gold | Standings, built by turning each game into one row per team |
 
-As a sanity check, the 2024 results match the real season: Lamar Jackson leads quarterbacks in EPA per dropback, Ja'Marr Chase ranks as WR1, and the Lions and Chiefs both finish 15–2.
+Player stats load with a Delta `MERGE` on player, season, week, and season type. Rerunning the notebook doesn't duplicate rows, and loading another season leaves the existing ones alone. Teams (36 rows) and games (a few thousand) are small enough that I overwrite them on every run.
+
+I checked the output against the real 2024 season. Lamar Jackson leads quarterbacks in EPA per dropback, Ja'Marr Chase is WR1, and the Lions and Chiefs both finish 15–2.
 
 ![Fabric lakehouse tables](docs/lakehouse-tables.png)
 
 ![Power BI report](docs/powerbi-report.png)
 
-## Deploy it yourself
+## What isn't done
 
-You need an Azure subscription, the Azure CLI, and a Microsoft Fabric workspace.
+- Rosters are copied to bronze, but nothing reads them yet.
+- The player stats files stop at 2024. nflverse publishes later seasons in a different release with three renamed columns, so adding 2025 means changing one row in the control file and three column mappings in the silver load.
+- The gold tables don't share a season or team dimension, so a slicer in the report only filters the table it was built on.
+- There's no trigger on the Data Factory pipeline. I run it by hand.
+- Data Factory was built in the studio, not from Git. The JSON in `adf/` is a copy of what's deployed.
+- The notebook lets Spark infer the CSV schema, and the only checks are the ones I did by eye.
+
+## What I'd add for a real client
+
+- Private endpoints on the storage account and Key Vault, and shared key access turned off.
+- A prod parameter file and a second environment with its own approval.
+- Git integration for Data Factory and Fabric, so they deploy the same way the infrastructure does.
+- Checks between bronze and silver: row counts, nulls in the key columns, and a schema check, so a renamed column fails the load instead of filling it with nulls.
+- Alerts on failed pipeline runs.
+
+## Running it yourself
+
+You need an Azure subscription, the Azure CLI, and a Fabric workspace.
 
 ```bash
 # 1. Create the resource group
 az group create --name rg-nfl-lab-dev --location eastus
 
-# 2. Set fabricUserObjectId in infra/main.dev.bicepparam to your Entra user's object ID
+# 2. Put your Entra user's object ID in infra/main.dev.bicepparam (fabricUserObjectId)
 az ad user show --id <you>@<tenant>.onmicrosoft.com --query id -o tsv
 
 # 3. Preview, then deploy
@@ -139,21 +133,13 @@ az deployment group create  --resource-group rg-nfl-lab-dev --parameters infra/m
 
 Then:
 
-1. Upload `adf/control.csv` to the `config` container in the storage account.
-2. Create the Data Factory linked services, datasets, and pipeline from the JSON in `adf/`, and run `pl_ingest_nfl` with a season, for example `2024`.
+1. Upload `adf/control.csv` to the `config` container.
+2. Create the linked services, datasets, and pipeline from the JSON in `adf/`. Change the URL in `ls_adls.json` to your storage account first. Run `pl_ingest_nfl` with a season, for example `2024`.
 3. In Fabric, create a lakehouse, add a shortcut to the `bronze/nfl` folder, and run the cells in `fabric/nb_nfl_bronze_to_gold.py`.
 4. Query the gold tables with `fabric/sql_endpoint_queries.sql`, or build a Direct Lake semantic model on them.
 
-To run the CI/CD pipeline, create an Azure DevOps service connection named `sc-nfl-lab` using workload identity federation, scoped to the resource group.
-
-## What I would add for production
-
-- **Private endpoints** on the storage account and Key Vault, so nothing is reachable from the public internet.
-- **A separate production environment,** with its own parameter file and its own approval gate, ideally in a separate subscription.
-- **Data Factory and Fabric under Git integration,** each with its own CI/CD, so pipeline and notebook changes are deployed the same way as the infrastructure.
-- **Data-quality checks between bronze and silver:** row counts, null checks on keys, and schema-drift alerts.
-- **Monitoring:** Data Factory failure alerts through Azure Monitor, and Fabric capacity usage tracking.
+For the DevOps pipeline, create a service connection named `sc-nfl-lab` with workload identity federation, scoped to the resource group, and give it the constrained role described above.
 
 ## Data source
 
-NFL data comes from [nflverse](https://github.com/nflverse/nflverse-data), a public, community-maintained dataset.
+The data comes from [nflverse](https://github.com/nflverse/nflverse-data), a public dataset maintained by its community.
