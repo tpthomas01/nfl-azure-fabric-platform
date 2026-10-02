@@ -1,0 +1,5 @@
+table,relative_url
+player_stats,player_stats/player_stats_{season}.csv
+rosters,rosters/roster_{season}.csv
+teams,teams/teams_colors_logos.csv
+games,schedules/games.csv

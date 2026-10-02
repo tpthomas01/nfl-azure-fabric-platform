@@ -1,0 +1,25 @@
+{
+    "name": "ds_http_file",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "ls_http_nflverse",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "relativeUrl": {
+                "type": "string"
+            }
+        },
+        "annotations": [],
+        "type": "Binary",
+        "typeProperties": {
+            "location": {
+                "type": "HttpServerLocation",
+                "relativeUrl": {
+                    "value": "@dataset().relativeUrl",
+                    "type": "Expression"
+                }
+            }
+        }
+    }
+}

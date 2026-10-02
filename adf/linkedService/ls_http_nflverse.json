@@ -1,0 +1,12 @@
+{
+    "name": "ls_http_nflverse",
+    "properties": {
+        "annotations": [],
+        "type": "HttpServer",
+        "typeProperties": {
+            "url": "https://github.com/nflverse/nflverse-data/releases/download/",
+            "enableServerCertificateValidation": true,
+            "authenticationType": "Anonymous"
+        }
+    }
+}

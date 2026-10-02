@@ -1,0 +1,127 @@
+{
+    "name": "pl_ingest_nfl",
+    "properties": {
+        "activities": [
+            {
+                "name": "lkp_control",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "DelimitedTextSource",
+                        "storeSettings": {
+                            "type": "AzureBlobFSReadSettings",
+                            "recursive": true,
+                            "enablePartitionDiscovery": false
+                        },
+                        "formatSettings": {
+                            "type": "DelimitedTextReadSettings"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "ds_control",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "fe_files",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "lkp_control",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('lkp_control').output.value",
+                        "type": "Expression"
+                    },
+                    "batchCount": 4,
+                    "activities": [
+                        {
+                            "name": "cp_to_bronze",
+                            "type": "Copy",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "BinarySource",
+                                    "storeSettings": {
+                                        "type": "HttpReadSettings",
+                                        "requestMethod": "GET"
+                                    },
+                                    "formatSettings": {
+                                        "type": "BinaryReadSettings"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "BinarySink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "ds_http_file",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "relativeUrl": {
+                                            "value": "@replace(item().relative_url, '{season}', pipeline().parameters.season)",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "ds_bronze_file",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "folderPath": {
+                                            "value": "@concat('nfl/', item().table, '/ingest_date=', formatDateTime(utcNow(), 'yyyy-MM-dd'))",
+                                            "type": "Expression"
+                                        },
+                                        "fileName": {
+                                            "value": "@replace(split(item().relative_url, '/')[1], '{season}', pipeline().parameters.season)",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "season": {
+                "type": "string",
+                "defaultValue": "2024"
+            }
+        },
+        "annotations": []
+    }
+}
