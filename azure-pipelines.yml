@@ -1,6 +1,6 @@
-# NFL Azure Lab - CI/CD for infrastructure
+# CI/CD for the infrastructure in infra/
 # Stage 1 (Validate): compile the Bicep and run what-if to preview changes.
-# Stage 2 (Deploy):   deploy to dev, only from main, through an environment you can put an approval on.
+# Stage 2 (Deploy):   deploy to dev, only from main, after an approval on the nfl-dev environment.
 
 trigger:
   branches:
@@ -11,10 +11,10 @@ trigger:
       - infra/*
 
 pool:
-  vmImage: ubuntu-latest   # if you're using a self-hosted agent instead, replace with:  name: Default
+  vmImage: ubuntu-latest
 
 variables:
-  azureServiceConnection: 'sc-nfl-lab'   # name of the service connection you create in Lab 2
+  azureServiceConnection: 'sc-nfl-lab'   # service connection, workload identity federation
   resourceGroup: 'rg-nfl-lab-dev'
   paramFile: 'infra/main.dev.bicepparam'
 
@@ -44,7 +44,7 @@ stages:
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
     jobs:
       - deployment: DeployDev
-        environment: nfl-dev   # created automatically on first run; add an approval check to it later
+        environment: nfl-dev   # has an approval check
         strategy:
           runOnce:
             deploy:

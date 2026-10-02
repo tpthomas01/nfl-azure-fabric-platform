@@ -1,5 +1,5 @@
-# NFL Azure Lab - Fabric notebook: bronze (raw CSV files) -> silver (clean Delta) -> gold (analytics Delta)
-# Paste each CELL into its own notebook cell, in order. Attach the lakehouse lh_nfl as the default lakehouse first.
+# Fabric notebook: bronze (raw CSV files) -> silver (clean Delta) -> gold (analytics Delta)
+# Each CELL block is one notebook cell. The lakehouse lh_nfl is attached as the default lakehouse.
 
 # ======================= CELL 1: config + helper =======================
 from pyspark.sql import functions as F
