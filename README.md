@@ -2,7 +2,7 @@
 
 A small data platform I built end to end on Azure. The infrastructure is written in Bicep and deployed through Azure DevOps. Data Factory pulls public NFL data into a data lake, and a Fabric lakehouse turns it into Delta tables and a Power BI report.
 
-My paid data engineering work has been on Databricks, Spark, and Snowflake. I hadn't used Data Factory, Fabric, or Bicep on a client, so I built this to learn them properly. I picked NFL data because it's more fun to check than a sample sales database: I know what the right answer looks like.
+My paid data engineering work has been on Databricks, Spark, and Snowflake. I hadn't used Data Factory, Fabric, or Bicep on a client before, so I built this to learn them properly. I picked NFL data because it's more fun to check than a sample sales database.
 
 ## How it fits together
 
